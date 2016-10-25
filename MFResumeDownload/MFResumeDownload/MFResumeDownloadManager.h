@@ -15,17 +15,21 @@
 + (instancetype)sharedInstance;
 
 @property (nonatomic, weak) id<MFResumeDownloadDelegate> delegate;
+@property (nonatomic, assign) NSUInteger maxDownloadCount;
+@property (nonatomic, assign) BOOL onlyWifiDownload;
 
-- (MFResumeDownloadResult)downloadFileWithUrl:(NSString *)urlString
-                                     progress:(DownloadProgressBlock)progressBlock
-                                      success:(DownloadSuccessBlock)successBlock
-                                      failure:(DownloadFailureBlock)failureBlock;
+- (void)addDownloadTaskWithUrl:(NSString *)url
+                        result:(AddDownloadTaskResultBlock)addTaskResultBlock
+                      progress:(DownloadProgressBlock)progressBlock
+                       success:(DownloadSuccessBlock)successBlock
+                       failure:(DownloadFailureBlock)failureBlock;
 
-- (MFResumeDownloadResult)downloadFileWithUrl:(NSString *)urlString
-                                     fileName:(NSString *)fileName
-                                     progress:(DownloadProgressBlock)progressBlock
-                                      success:(DownloadSuccessBlock)successBlock
-                                      failure:(DownloadFailureBlock)failureBlock;
+- (void)addDownloadTaskWithUrl:(NSString *)url
+                      filename:(NSString *)filename
+                        result:(AddDownloadTaskResultBlock)addTaskResultBlock
+                      progress:(DownloadProgressBlock)progressBlock
+                       success:(DownloadSuccessBlock)successBlock
+                       failure:(DownloadFailureBlock)failureBlock;
 
 - (void)pauseDownloadWithFileUrl:(NSString *)fileUrl;
 
@@ -36,5 +40,7 @@
 - (NSMutableArray<MFResumeDownloadModel *> *)downloadList;
 
 - (MFResumeDownloadModel *)resumeDownloadModelWithFileUrl:(NSString *)fileUrl;
+
+- (void)autoDownloadUnFinishedTasks;
 
 @end

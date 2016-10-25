@@ -13,29 +13,24 @@
 
 @interface MFResumeDownloadOperation : NSObject
 
-typedef void(^DownloadProgressBlock)(CGFloat progress, CGFloat totalMBRead, CGFloat totalMBExpectedToRead);
-typedef void(^DownloadSuccessBlock)(AFHTTPRequestOperation *operation, id responseObject);
-typedef void(^DownloadFailureBlock)(AFHTTPRequestOperation *operation, NSError *error);
-
-typedef NS_ENUM(NSUInteger,MFResumeDownloadResult) {
-    MFResumeDownloadResultOk = 0,
-    MFResumeDownloadResultExistFinishFile   // 本地已经成功下载过
-};
 
 @property (nonatomic, weak) id<MFResumeDownloadDelegate> delegate;
+@property (nonatomic, assign) NSUInteger maxDownloadCount;
 
 #pragma mark - 实例方法
 
-- (MFResumeDownloadResult)downloadFileWithUrl:(NSString *)urlString
-                   progress:(DownloadProgressBlock)progressBlock
-                    success:(DownloadSuccessBlock)successBlock
-                    failure:(DownloadFailureBlock)failureBlock;
+- (void)addDownloadTaskWithUrl:(NSString *)url
+                        result:(AddDownloadTaskResultBlock)addTaskResultBlock
+                      progress:(DownloadProgressBlock)progressBlock
+                       success:(DownloadSuccessBlock)successBlock
+                       failure:(DownloadFailureBlock)failureBlock;
 
-- (MFResumeDownloadResult)downloadFileWithUrl:(NSString *)urlString
-                   fileName:(NSString *)fileName
-                   progress:(DownloadProgressBlock)progressBlock
-                    success:(DownloadSuccessBlock)successBlock
-                    failure:(DownloadFailureBlock)failureBlock;
+- (void)addDownloadTaskWithUrl:(NSString *)url
+                      filename:(NSString *)filename
+                        result:(AddDownloadTaskResultBlock)addTaskResultBlock
+                      progress:(DownloadProgressBlock)progressBlock
+                       success:(DownloadSuccessBlock)successBlock
+                       failure:(DownloadFailureBlock)failureBlock;
 
 - (void)pauseDownloadWithFileUrl:(NSString *)fileUrl;
 
@@ -46,5 +41,7 @@ typedef NS_ENUM(NSUInteger,MFResumeDownloadResult) {
 - (NSMutableArray<MFResumeDownloadModel *> *)downloadList;
 
 - (MFResumeDownloadModel *)resumeDownloadModelWithFileUrl:(NSString *)fileUrl;
+
+- (void)autoDownloadUnFinishedTasks;
 
 @end

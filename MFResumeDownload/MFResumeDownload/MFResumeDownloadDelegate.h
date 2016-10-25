@@ -12,10 +12,8 @@
 
 @optional
 
-- (void)downloadProgressWithFileUrl:(NSString *)fileUrl downloadModel:(MFResumeDownloadModel *)model;
-- (void)downloadCompletedWithFileUrl:(NSString *)fileUrl downloadModel:(MFResumeDownloadModel *)model;
-- (void)downloadFailedWithFileUrl:(NSString *)fileUrl downloadModel:(MFResumeDownloadModel *)model;
-- (void)downloadPausedWithFileUrl:(NSString *)fileUrl downloadModel:(MFResumeDownloadModel *)model;
-- (void)downloadCanceledWithFileUrl:(NSString *)fileUrl downloadModel:(MFResumeDownloadModel *)model;
+- (void)downloadProgressWithDownloadModel:(MFResumeDownloadModel *)model;
+- (void)downloadStateChange:(MFRDState)state downloadModel:(MFResumeDownloadModel *)model;
+- (void)downloadDeletedWithDownloadModel:(MFResumeDownloadModel *)model;
 
 @end

@@ -9,11 +9,15 @@
 #import "MFResumeDownloadOperation.h"
 #import "MFResumeDownloadModel.h"
 #import "MFResumeDownloadCommon.h"
+#import "MFResumeDownloadManager.h"
 #import <CommonCrypto/CommonCrypto.h>
+
 
 @interface MFResumeDownloadOperation ()
 
 @property (nonatomic, strong) NSMutableArray<MFResumeDownloadModel *> *downloadList;
+@property (nonatomic, strong) NSMutableArray<MFResumeDownloadModel *> *downloadingList;
+@property (nonatomic, strong) NSMutableArray<MFResumeDownloadModel *> *preDownloadList;
 @property (nonatomic, strong) MFResumeDownloadStorage *downloadStorage;
 
 @end
@@ -33,6 +37,8 @@
     [self createDownloadDirIfNeeded];
     
     self.downloadStorage = [[MFResumeDownloadStorage alloc] init];
+    self.downloadingList = [NSMutableArray array];
+    self.preDownloadList = [NSMutableArray array];
     
     NSArray<MFResumeDownloadModel *> *savedDownloadList = [self.downloadStorage getDownloadList];
     if (savedDownloadList.count > 0) {
@@ -50,9 +56,9 @@
         NSString *localpath = [self filePath:hashname];
         downloadModel.totalMBRead = [self fileSizeForPath:localpath] / 1024 / 1024.0f;
         downloadModel.progress = downloadModel.totalMBRead / downloadModel.totalMBSize;
-        if (downloadModel.state == MFRDDownloading) {
-            downloadModel.state = MFRDPause;
-        }
+//        if (downloadModel.state == MFRDDownloading || downloadModel.state == MFRDQueue) {
+//            downloadModel.state = MFRDPause;
+//        }
     }
 }
 
@@ -79,18 +85,141 @@
     return fileSize;
 }
 
-- (MFResumeDownloadResult)downloadFileWithUrl:(NSString *)urlString progress:(DownloadProgressBlock)progressBlock success:(DownloadSuccessBlock)successBlock failure:(DownloadFailureBlock)failureBlock
+- (void)addDownloadTaskWithUrl:(NSString *)url
+                        result:(AddDownloadTaskResultBlock)addTaskResultBlock
+                      progress:(DownloadProgressBlock)progressBlock
+                       success:(DownloadSuccessBlock)successBlock
+                       failure:(DownloadFailureBlock)failureBlock
 {
-    return  [self downloadFileWithUrl:urlString fileName:nil progress:progressBlock success:successBlock failure:failureBlock];
+    [self addDownloadTaskWithUrl:url filename:nil result:addTaskResultBlock progress:progressBlock success:successBlock failure:failureBlock];
 }
 
-- (MFResumeDownloadResult)downloadFileWithUrl:(NSString *)urlString fileName:(NSString *)fileName progress:(DownloadProgressBlock)progressBlock success:(DownloadSuccessBlock)successBlock failure:(DownloadFailureBlock)failureBlock
+- (void)addDownloadTaskWithUrl:(NSString *)url
+                      filename:(NSString *)filename
+                        result:(AddDownloadTaskResultBlock)addTaskResultBlock
+                      progress:(DownloadProgressBlock)progressBlock
+                       success:(DownloadSuccessBlock)successBlock
+                       failure:(DownloadFailureBlock)failureBlock
 {
-    MFResumeDownloadResult downloadResult = [self prepareDownload:urlString];
-    if (downloadResult == MFResumeDownloadResultExistFinishFile) {
-        return downloadResult;
+    WEAKIFYSELF;
+    [self prepareDownloadTaskWithUrl:url filename:filename result:^(MFRDAddTaskResult result) {
+        STRONGIFYSELF;
+        safeBlock(addTaskResultBlock,result);
+        [self handleAddTaskResult:result url:url filename:filename progress:progressBlock success:successBlock failure:failureBlock];
+    } progress:progressBlock success:successBlock failure:failureBlock];
+}
+
+- (void)handleAddTaskResult:(MFRDAddTaskResult)result
+                        url:(NSString *)url
+                   filename:(NSString *)filename
+                   progress:(DownloadProgressBlock)progressBlock
+                    success:(DownloadSuccessBlock)successBlock
+                    failure:(DownloadFailureBlock)failureBlock
+{
+    MFResumeDownloadModel *downloadModel = [self resumeDownloadModelWithFileUrl:url];
+    
+    if (result == MFRDAddTaskResultSuccessStartDownloading) {
+        [self.downloadingList addObject:downloadModel];
+        if (self.delegate && [self.delegate respondsToSelector:@selector(downloadStateChange:downloadModel:)]) {
+            [self.delegate downloadStateChange:MFRDDownloading downloadModel:downloadModel];
+        }
+        [self downloadFileWithUrl:url fileName:filename progress:progressBlock success:successBlock failure:failureBlock];
+        
+    } else if (result == MFRDAddTaskResultSuccessAddDownloadQueue) {
+        [self.preDownloadList addObject:downloadModel];
+        if (self.delegate && [self.delegate respondsToSelector:@selector(downloadStateChange:downloadModel:)]) {
+            [self.delegate downloadStateChange:MFRDQueue downloadModel:downloadModel];
+        }
+    }
+}
+
+- (void)prepareDownloadTaskWithUrl:(NSString *)url
+                          filename:(NSString *)filename
+                            result:(AddDownloadTaskResultBlock)addTaskResultBlock
+                          progress:(DownloadProgressBlock)progressBlock
+                           success:(DownloadSuccessBlock)successBlock
+                           failure:(DownloadFailureBlock)failureBlock
+{
+    MFResumeDownloadModel *downloadModel = [self resumeDownloadModelWithFileUrl:url];
+    
+    if (downloadModel && downloadModel.state == MFRDQueue && [self.preDownloadList containsObject:downloadModel]) {
+        safeBlock(addTaskResultBlock,MFRDAddTaskResultAlreadyInDownloadQueue);
+        return;
     }
     
+    if (downloadModel && downloadModel.state == MFRDDownloading && [self.downloadingList containsObject:downloadModel]) {
+        safeBlock(addTaskResultBlock,MFRDAddTaskResultAlreadyDownloading);
+        return;
+    }
+    
+    if (downloadModel && downloadModel.state == MFRDFinish) {
+        safeBlock(addTaskResultBlock,MFRDAddTaskResultAlreadyDownloaded);
+        return;
+    }
+    
+    if (downloadModel && downloadModel.state == MFRDFail) {
+        NSString *hashname = downloadModel.hashname;
+        NSString *localpath = [self filePath:hashname];
+        [self removeDownloadFileIfExist:localpath];
+        [self removeDownloadList:downloadModel];
+    }
+    
+    BOOL startDownloadNow = [self ableToStartDownloadNow];
+    MFRDState state = startDownloadNow ? MFRDDownloading : MFRDQueue;
+    [self updateDownloadModelWithUrl:url filename:filename state:state progress:progressBlock success:successBlock failure:failureBlock];
+    
+    safeBlock(addTaskResultBlock,startDownloadNow ? MFRDAddTaskResultSuccessStartDownloading : MFRDAddTaskResultSuccessAddDownloadQueue);
+    
+}
+
+- (void)updateDownloadModelWithUrl:(NSString *)url
+                          filename:(NSString *)filename
+                             state:(MFRDState)state
+                          progress:(DownloadProgressBlock)progressBlock
+                           success:(DownloadSuccessBlock)successBlock
+                           failure:(DownloadFailureBlock)failureBlock
+{
+    MFResumeDownloadModel *downloadModel = [self resumeDownloadModelWithFileUrl:url];
+    
+    if (!downloadModel) {
+        MFResumeDownloadModel *newDownloadModel = [MFResumeDownloadModel new];
+        newDownloadModel.url = url;
+        newDownloadModel.filename = filename;
+        newDownloadModel.hashname = [self stringToMD5:url];
+        newDownloadModel.totalMBRead = 0;
+        newDownloadModel.progress = 0;
+        newDownloadModel.state = state;
+        newDownloadModel.progressBlock = progressBlock;
+        newDownloadModel.successBlock = successBlock;
+        newDownloadModel.failBlock = failureBlock;
+        
+        [self.downloadList addObject:newDownloadModel];
+    } else {
+        downloadModel.state = state;
+        downloadModel.progressBlock = progressBlock;
+        downloadModel.successBlock = successBlock;
+        downloadModel.failBlock = failureBlock;
+        
+        if (downloadModel.operation && ![downloadModel.operation isCancelled]) {
+            [downloadModel.operation cancel];
+        }
+    }
+    
+    [self saveDownloadListToLocal];
+
+}
+
+- (BOOL)ableToStartDownloadNow
+{
+    BOOL startDownload = NO;
+    if (self.downloadingList.count < self.maxDownloadCount && self.preDownloadList.count == 0) {
+        startDownload = YES;
+    }
+    return startDownload;
+}
+
+- (void)downloadFileWithUrl:(NSString *)urlString fileName:(NSString *)fileName progress:(DownloadProgressBlock)progressBlock success:(DownloadSuccessBlock)successBlock failure:(DownloadFailureBlock)failureBlock
+{
     BOOL isFileUrlExist = NO;
     for (MFResumeDownloadModel *downloadModel in self.downloadList) {
         if ([urlString isEqualToString:downloadModel.url]) {
@@ -98,7 +227,7 @@
             
             if (downloadModel.operation) {
                 if ([downloadModel.operation isExecuting]) {
-                    return downloadResult;
+                    return;
                 } else {
                     [downloadModel.operation cancel];
                 }
@@ -108,9 +237,6 @@
     }
 
     NSURL *fileUrl = [NSURL URLWithString:urlString];
-    if (!fileName) {
-        fileName = [fileUrl lastPathComponent];
-    }
     
     NSString *filePath = [self filePath:[self stringToMD5:urlString]];
     NSURLRequest *request = [NSURLRequest requestWithURL:fileUrl];
@@ -156,23 +282,17 @@
         
         [weakSelf updateProgress:urlString totalMBRead:totalMBRead totalMBSize:totalMBSize progress:progress bytesRead:bytesRead];
         
-        if (progressBlock) {
-            progressBlock(progress, totalMBRead, totalMBSize);
-        }
+        safeBlock(progressBlock,progress,totalMBRead,totalMBSize);
     }];
     
     // 成功和失败回调
     [operation setCompletionBlockWithSuccess:^(AFHTTPRequestOperation *operation, id responseObject) {
         [weakSelf updateCompletion:urlString];
-        if (successBlock) {
-            successBlock(operation, responseObject);
-        }
+        safeBlock(successBlock ,operation,responseObject);
     } failure:^(AFHTTPRequestOperation *operation, NSError *error) {
         if([error code] != NSURLErrorCancelled) {
             [weakSelf updateFail:urlString];
-            if (failureBlock) {
-                failureBlock(operation, error);
-            }
+            safeBlock(failureBlock,operation,error);
         }
     }];
     
@@ -190,36 +310,12 @@
         downloadModel.operation = operation;
         
         [self.downloadList addObject:downloadModel];
+        [self saveDownloadListToLocal];
     }
     
-    [self saveDownloadListToLocal];
     
     [operation start];
-
     
-    return downloadResult;
-}
-
-- (MFResumeDownloadResult)prepareDownload:(NSString *)fileUrl
-{
-    MFResumeDownloadModel *downloadModel = [self resumeDownloadModelWithFileUrl:fileUrl];
-    
-    if (!downloadModel) {
-        return MFResumeDownloadResultOk;
-    }
-    
-    MFRDState state = downloadModel.state;
-    
-    if (state == MFRDFinish) {
-        return MFResumeDownloadResultExistFinishFile;
-    } else if (state == MFRDFail) {
-        NSString *hashname = downloadModel.hashname;
-        NSString *localpath = [self filePath:hashname];
-        [self removeDownloadFileIfExist:localpath];
-        [self removeDownloadList:downloadModel];
-    }
-    
-    return MFResumeDownloadResultOk;
 }
 
 - (BOOL)removeDownloadFileIfExist:(NSString *)filepath
@@ -254,8 +350,8 @@
     
     [self updateDownloadSpeed:resumeDownloadModel bytesRead:bytesRead];
     
-    if (self.delegate && [self.delegate respondsToSelector:@selector(downloadProgressWithFileUrl:downloadModel:)]) {
-        [self.delegate downloadProgressWithFileUrl:fileUrl downloadModel:resumeDownloadModel];
+    if (self.delegate && [self.delegate respondsToSelector:@selector(downloadProgressWithDownloadModel:)]) {
+        [self.delegate downloadProgressWithDownloadModel:resumeDownloadModel];
     }
 }
 
@@ -268,12 +364,14 @@
     MFResumeDownloadSpeed *downloadSpeed = resumeDownloadModel.downloadSpeed;
     NSDate *currentDate = [NSDate date];
     downloadSpeed.totalBytesRead += bytesRead;
+    
     if (!downloadSpeed.lastReadDate) {
         downloadSpeed.lastReadDate = currentDate;
     }
     
-    if ([currentDate timeIntervalSinceDate:downloadSpeed.lastReadDate] >= 1) {
-        NSTimeInterval timeInterval = [currentDate timeIntervalSinceDate:downloadSpeed.lastReadDate];
+    
+    NSTimeInterval timeInterval = [currentDate timeIntervalSinceDate:downloadSpeed.lastReadDate];
+    if (timeInterval >= 1 || (downloadSpeed.speed == 0 && timeInterval != 0)) {
         long long speed = downloadSpeed.totalBytesRead / timeInterval;
         downloadSpeed.speed = speed;
         downloadSpeed.totalBytesRead = 0;
@@ -300,11 +398,12 @@
     resumeDownloadModel.state = MFRDFinish;
     resumeDownloadModel.finishTime = [[NSDate date] timeIntervalSince1970];
     
-    if (self.delegate && [self.delegate respondsToSelector:@selector(downloadCompletedWithFileUrl:downloadModel:)]) {
-        [self.delegate downloadCompletedWithFileUrl:fileUrl downloadModel:resumeDownloadModel];
+    if (self.delegate && [self.delegate respondsToSelector:@selector(downloadStateChange:downloadModel:)]) {
+        [self.delegate downloadStateChange:MFRDFinish downloadModel:resumeDownloadModel];
     }
     
     [self saveDownloadListToLocal];
+    [self downloadFromQueueListWhenDownloadStateChanged:fileUrl];
 }
 
 - (void)updateFail:(NSString *)fileUrl
@@ -318,11 +417,13 @@
     
     [self resetDownloadSpeed:resumeDownloadModel];
     
-    if (self.delegate && [self.delegate respondsToSelector:@selector(downloadFailedWithFileUrl:downloadModel:)]) {
-        [self.delegate downloadFailedWithFileUrl:fileUrl downloadModel:resumeDownloadModel];
+    if (self.delegate && [self.delegate respondsToSelector:@selector(downloadStateChange:downloadModel:)]) {
+        [self.delegate downloadStateChange:MFRDFail downloadModel:resumeDownloadModel];
     }
     
     [self saveDownloadListToLocal];
+    [self downloadFromQueueListWhenDownloadStateChanged:fileUrl];
+
 }
 
 - (void)updatePause:(NSString *)fileUrl
@@ -332,17 +433,23 @@
         return;
     }
     
-    if (resumeDownloadModel.operation && [resumeDownloadModel.operation isPaused]) {
+    if (resumeDownloadModel.state == MFRDDownloading && resumeDownloadModel.operation && [resumeDownloadModel.operation isPaused]) {
+        resumeDownloadModel.state = MFRDPause;
+    }
+    
+    if (resumeDownloadModel.state == MFRDQueue) {
         resumeDownloadModel.state = MFRDPause;
     }
     
     [self resetDownloadSpeed:resumeDownloadModel];
     
-    if (self.delegate && [self.delegate respondsToSelector:@selector(downloadPausedWithFileUrl:downloadModel:)]) {
-        [self.delegate downloadPausedWithFileUrl:fileUrl downloadModel:resumeDownloadModel];
+    if (self.delegate && [self.delegate respondsToSelector:@selector(downloadStateChange:downloadModel:)]) {
+        [self.delegate downloadStateChange:MFRDPause downloadModel:resumeDownloadModel];
     }
     
     [self saveDownloadListToLocal];
+    [self downloadFromQueueListWhenDownloadStateChanged:fileUrl];
+
 }
 
 - (void)updateCancel:(NSString *)fileUrl
@@ -356,14 +463,59 @@
         resumeDownloadModel.state = MFRDCancel;
     }
     
+    if (resumeDownloadModel.state == MFRDQueue) {
+        resumeDownloadModel.state = MFRDCancel;
+    }
+    
     [self resetDownloadSpeed:resumeDownloadModel];
     
     
-    if (self.delegate && [self.delegate respondsToSelector:@selector(downloadCanceledWithFileUrl:downloadModel:)]) {
-        [self.delegate downloadCanceledWithFileUrl:fileUrl downloadModel:resumeDownloadModel];
+    if (self.delegate && [self.delegate respondsToSelector:@selector(downloadStateChange:downloadModel:)]) {
+        [self.delegate downloadStateChange:MFRDCancel downloadModel:resumeDownloadModel];
     }
     
     [self saveDownloadListToLocal];
+    [self downloadFromQueueListWhenDownloadStateChanged:fileUrl];
+
+}
+
+- (void)updateDelete:(NSString *)fileUrl
+{
+    MFResumeDownloadModel *resumeDownloadModel = [self resumeDownloadModelWithFileUrl:fileUrl];
+    if (!resumeDownloadModel) {
+        return;
+    }
+    
+    [self downloadFromQueueListWhenDownloadStateChanged:fileUrl];
+    
+    NSString *localpath = [self filePath:resumeDownloadModel.hashname];
+    [self removeDownloadFileIfExist:localpath];
+    [self removeDownloadList:resumeDownloadModel];
+    
+    if (self.delegate && [self.delegate respondsToSelector:@selector(downloadDeletedWithDownloadModel:)]) {
+        [self.delegate downloadDeletedWithDownloadModel:resumeDownloadModel];
+    }
+    
+    [self saveDownloadListToLocal];
+
+}
+
+- (void)downloadFromQueueListWhenDownloadStateChanged:(NSString *)url
+{
+    MFResumeDownloadModel *resumeDownloadModel = [self resumeDownloadModelWithFileUrl:url];
+    if (!resumeDownloadModel) {
+        return;
+    }
+    
+    [self.downloadingList removeObject:resumeDownloadModel];
+    [self.preDownloadList removeObject:resumeDownloadModel];
+    
+    if (self.downloadingList.count < self.maxDownloadCount && self.preDownloadList.count > 0) {
+        MFResumeDownloadModel *downloadModel = self.preDownloadList.firstObject;
+        [self.preDownloadList removeObject:downloadModel];
+        [self.downloadingList addObject:downloadModel];
+        [self downloadFileWithUrl:downloadModel.url fileName:downloadModel.filename progress:downloadModel.progressBlock success:downloadModel.successBlock failure:downloadModel.failBlock];
+    }
 }
 
 - (void)saveDownloadListToLocal
@@ -380,6 +532,23 @@
     }
     
     return nil;
+}
+
+- (void)autoDownloadUnFinishedTasks
+{
+    NSMutableArray<MFResumeDownloadModel *> *preDownloadList = [NSMutableArray array];
+    
+    for (MFResumeDownloadModel *downloadModel in self.downloadList) {
+        if (downloadModel.state == MFRDDownloading) {
+            [self addDownloadTaskWithUrl:downloadModel.url filename:downloadModel.filename result:nil progress:nil success:nil failure:nil];
+        } else if (downloadModel.state == MFRDQueue) {
+            [preDownloadList addObject:downloadModel];
+        }
+    }
+    
+    for (MFResumeDownloadModel *downloadModel in preDownloadList) {
+        [self addDownloadTaskWithUrl:downloadModel.url filename:downloadModel.filename result:nil progress:nil success:nil failure:nil];
+    }
 }
 
 - (NSString *)filePath:(NSString *)fileName
@@ -418,8 +587,12 @@
         return;
     }
     
-    AFHTTPRequestOperation *operation = resumeDownloadModel.operation;
-    [operation pause];
+    if (resumeDownloadModel.state == MFRDDownloading) {
+        AFHTTPRequestOperation *operation = resumeDownloadModel.operation;
+        if (operation && ![operation isPaused]) {
+            [operation pause];
+        }
+    }
     
     [self updatePause:fileUrl];
 }
@@ -431,8 +604,12 @@
         return;
     }
     
-    AFHTTPRequestOperation *operation = resumeDownloadModel.operation;
-    [operation cancel];
+    if (resumeDownloadModel.state == MFRDDownloading || resumeDownloadModel.state == MFRDPause || resumeDownloadModel.state == MFRDFail) {
+        AFHTTPRequestOperation *operation = resumeDownloadModel.operation;
+        if (operation && ![operation isCancelled]) {
+            [operation cancel];
+        }
+    }
     
     [self updateCancel:fileUrl];
 }
@@ -444,13 +621,14 @@
         return;
     }
     
-    AFHTTPRequestOperation *operation = resumeDownloadModel.operation;
-    [operation cancel];
+    if (resumeDownloadModel.state == MFRDDownloading || resumeDownloadModel.state == MFRDPause || resumeDownloadModel.state == MFRDFail) {
+        AFHTTPRequestOperation *operation = resumeDownloadModel.operation;
+        if (operation && ![operation isCancelled]) {
+            [operation cancel];
+        }
+    }
     
-    NSString *localpath = [self filePath:resumeDownloadModel.hashname];
-    [self removeDownloadFileIfExist:localpath];
-    [self removeDownloadList:resumeDownloadModel];
-    [self saveDownloadListToLocal];
+    [self updateDelete:fileUrl];
     
 }
 
@@ -469,6 +647,11 @@
     
     for (int i = 0; i < CC_MD5_DIGEST_LENGTH; i++) {
         [saveResult appendFormat:@"%02x", result[i]];
+    }
+    
+    NSString *ext = str.pathExtension;
+    if (ext.length > 0) {
+        [saveResult appendFormat:@".%@",ext];
     }
     return saveResult;
 }

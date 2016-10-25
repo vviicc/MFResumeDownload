@@ -8,6 +8,8 @@
 
 #import "MFResumeDownloadManager.h"
 
+#define kMFRDMaxDownloadCount 2
+
 
 @interface MFResumeDownloadManager ()
 
@@ -41,7 +43,11 @@
 
 - (void)inits
 {
-    _downloadOperation = [[MFResumeDownloadOperation alloc] init];
+    self.onlyWifiDownload = YES;
+    
+    self.downloadOperation = [[MFResumeDownloadOperation alloc] init];
+    self.maxDownloadCount = kMFRDMaxDownloadCount;
+
 }
 
 - (void)setDelegate:(id<MFResumeDownloadDelegate>)delegate
@@ -51,21 +57,28 @@
     }
 }
 
-- (MFResumeDownloadResult)downloadFileWithUrl:(NSString *)urlString
-                                     progress:(DownloadProgressBlock)progressBlock
-                                      success:(DownloadSuccessBlock)successBlock
-                                      failure:(DownloadFailureBlock)failureBlock
+- (void)setMaxDownloadCount:(NSUInteger)maxDownloadCount
 {
-    return [_downloadOperation downloadFileWithUrl:urlString progress:progressBlock success:successBlock failure:failureBlock];
+    self.downloadOperation.maxDownloadCount = maxDownloadCount;
 }
 
-- (MFResumeDownloadResult)downloadFileWithUrl:(NSString *)urlString
-                                     fileName:(NSString *)fileName
-                                     progress:(DownloadProgressBlock)progressBlock
-                                      success:(DownloadSuccessBlock)successBlock
-                                      failure:(DownloadFailureBlock)failureBlock
+- (void)addDownloadTaskWithUrl:(NSString *)url
+                        result:(AddDownloadTaskResultBlock)addTaskResultBlock
+                      progress:(DownloadProgressBlock)progressBlock
+                       success:(DownloadSuccessBlock)successBlock
+                       failure:(DownloadFailureBlock)failureBlock
 {
-    return [_downloadOperation downloadFileWithUrl:urlString fileName:fileName progress:progressBlock success:successBlock failure:failureBlock];
+    [_downloadOperation addDownloadTaskWithUrl:url result:addTaskResultBlock progress:progressBlock success:successBlock failure:failureBlock];
+}
+
+- (void)addDownloadTaskWithUrl:(NSString *)url
+                      filename:(NSString *)filename
+                        result:(AddDownloadTaskResultBlock)addTaskResultBlock
+                      progress:(DownloadProgressBlock)progressBlock
+                       success:(DownloadSuccessBlock)successBlock
+                       failure:(DownloadFailureBlock)failureBlock
+{
+    [_downloadOperation addDownloadTaskWithUrl:url filename:filename result:addTaskResultBlock progress:progressBlock success:successBlock failure:failureBlock];
 }
 
 - (void)pauseDownloadWithFileUrl:(NSString *)fileUrl
@@ -91,6 +104,11 @@
 - (MFResumeDownloadModel *)resumeDownloadModelWithFileUrl:(NSString *)fileUrl
 {
     return [_downloadOperation resumeDownloadModelWithFileUrl:fileUrl];
+}
+
+- (void)autoDownloadUnFinishedTasks
+{
+    [_downloadOperation autoDownloadUnFinishedTasks];
 }
 
 @end

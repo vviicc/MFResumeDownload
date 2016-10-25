@@ -35,6 +35,7 @@ static NSString * const kMFResumeDownloadUIAddDownloadCellIdentifier = @"kMFResu
 {
     if (self = [super initWithStyle:style reuseIdentifier:reuseIdentifier]) {
         [self inits];
+    
     }
     return self;
 }
@@ -93,7 +94,7 @@ static NSString * const kMFResumeDownloadUIAddDownloadCellIdentifier = @"kMFResu
     __weak __typeof(self) weakSelf = self;
     
     if (!downloadModel || downloadModel.state == MFRDPause || downloadModel.state == MFRDFail || downloadModel.state == MFRDCancel) {
-        [MFRDManager downloadFileWithUrl:self.fileUrl fileName:self.filename progress:^(CGFloat progress, CGFloat totalMBRead, CGFloat totalMBExpectedToRead) {
+        [MFRDManager addDownloadTaskWithUrl:self.fileUrl filename:self.filename result:nil progress:^(CGFloat progress, CGFloat totalMBRead, CGFloat totalMBExpectedToRead) {
             [weakSelf updateDownloadProgress:progress];
         } success:nil failure:nil];
     } else if (downloadModel.state == MFRDDownloading) {
@@ -176,9 +177,9 @@ static NSString * const kMFResumeDownloadUIAddDownloadCellIdentifier = @"kMFResu
 {
     NSString *filename = @"filename";
     NSString *fileurl = @"fileurl";
-    self.addDownloadData = @[@{filename:@"QQ_V5.1.2.dmg",fileurl:@"http://dldir1.qq.com/qqfile/QQforMac/QQ_V5.1.2.dmg"},
-                         @{filename:@"SDWebImage.zip",fileurl:@"https://codeload.github.com/rs/SDWebImage/zip/master"},
-                         @{filename:@"YYKit.zip",fileurl:@"https://codeload.github.com/ibireme/YYKit/zip/master"}
+    self.addDownloadData = @[@{filename:@"1456117847747a_x264",fileurl:@"http://baobab.wdjcdn.com/1456117847747a_x264.mp4"},
+                         @{filename:@"14525705791193",fileurl:@"http://baobab.wdjcdn.com/14525705791193.mp4"},
+                         @{filename:@"1456459181808howtoloseweight_x264",fileurl:@"http://baobab.wdjcdn.com/1456459181808howtoloseweight_x264.mp4"}
                          ];
 }
 

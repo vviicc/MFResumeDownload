@@ -108,7 +108,7 @@ static NSString * const kMFResumeDownloadUIDemoCellIdentifier = @"kMFResumeDownl
 - (void)onClickOperation:(id)sender
 {
     MFRDState state = self.downloadModel.state;
-    if (state == MFRDDownloading) {
+    if (state == MFRDDownloading || state == MFRDQueue) {
         [MFRDManager pauseDownloadWithFileUrl:self.downloadModel.url];
         [self.operationButton setTitle:@"继续下载" forState:UIControlStateNormal];
     } else if (state == MFRDFinish) {
@@ -117,14 +117,22 @@ static NSString * const kMFResumeDownloadUIDemoCellIdentifier = @"kMFResumeDownl
         UIAlertView *alertView = [[UIAlertView alloc] initWithTitle:@"文件地址" message:localpath delegate:nil cancelButtonTitle:@"OK" otherButtonTitles:nil, nil];
         [alertView show];
     } else if (state == MFRDPause || state == MFRDFail || state == MFRDCancel) {
-        
-        [MFRDManager downloadFileWithUrl:self.downloadModel.url fileName:self.downloadModel.filename progress:^(CGFloat progress, CGFloat totalMBRead, CGFloat totalMBExpectedToRead) {
-        } success:^(AFHTTPRequestOperation *operation, id responseObject) {
-        } failure:^(AFHTTPRequestOperation *operation, NSError *error) {
-        }];
+        __weak __typeof(self) weakSelf = self;
+        [MFRDManager addDownloadTaskWithUrl:self.downloadModel.url
+                                   filename:self.downloadModel.filename
+                                     result:^(MFRDAddTaskResult result) {
+//                                         [weakSelf updateModel:weakSelf.downloadModel];
+                                     } progress:^(CGFloat progress, CGFloat totalMBRead, CGFloat totalMBExpectedToRead) {
+//                                         [weakSelf updateModel:weakSelf.downloadModel];
+                                     } success:^(AFHTTPRequestOperation *operation, id responseObject) {
+//                                         [weakSelf updateModel:weakSelf.downloadModel];
+                                     } failure:^(AFHTTPRequestOperation *operation, NSError *error) {
+//                                         [weakSelf updateModel:weakSelf.downloadModel];
+                                     }];
     }
 
 }
+
 
 - (NSString *)filePath:(NSString *)fileName
 {
@@ -150,17 +158,6 @@ static NSString * const kMFResumeDownloadUIDemoCellIdentifier = @"kMFResumeDownl
         [self updateModel:self.downloadModel];
     } else if (state == MFRDFinish || state == MFRDFail || state == MFRDCancel) {
         [MFRDManager deleteDownloadWithFileUrl:self.downloadModel.url];
-        
-        UIView *superView = self.superview;
-        while (![superView isKindOfClass:[UITableView class]] && superView) {
-            superView = superView.superview;
-        }
-        
-        if (superView) {
-            UITableView *tableView = (UITableView *)superView;
-            MFResumeDownloadUIDemoViewController *demoVC = (MFResumeDownloadUIDemoViewController *)tableView.delegate;
-            [demoVC performSelector:@selector(reloadAllData)];
-        }
     }
 }
 
@@ -172,9 +169,20 @@ static NSString * const kMFResumeDownloadUIDemoCellIdentifier = @"kMFResumeDownl
     self.fileUrlLabel.text = downloadModel.url;
 
     MFRDState state = downloadModel.state;
+    if (state == MFRDQueue) {
+        self.downloadStateLabel.text = @"等待下载";
+        self.downloadInfoLabel.hidden = YES;
+        [self.progressView setProgress:downloadModel.progress];
+        self.progressView.hidden = NO;
+        [self.operationButton setTitle:@"暂停" forState:UIControlStateNormal];
+        [self.cancelButton setTitle:@"取消" forState:UIControlStateNormal];
+    }
     if (state == MFRDDownloading) {
         self.downloadStateLabel.text = @"下载中";
         NSString *speed = [NSByteCountFormatter stringFromByteCount:downloadModel.downloadSpeed.speed countStyle:NSByteCountFormatterCountStyleFile];
+        if (downloadModel.downloadSpeed.speed == 0) {
+            speed = @"0 KB";
+        }
         self.downloadInfoLabel.text = [NSString stringWithFormat:@"%@/s  %.2f MB / %.2f MB", speed, downloadModel.totalMBRead,downloadModel.totalMBSize];
         self.downloadInfoLabel.hidden = NO;
         [self.progressView setProgress:downloadModel.progress];
@@ -349,30 +357,26 @@ static NSString * const kMFResumeDownloadUIDemoCellIdentifier = @"kMFResumeDownl
 #pragma mark - MFResumeDownloadDelegate
 
 #define MFResumeDownloadDemoReloadTableView \
-[self.tableview reloadData];\
+[self reloadAllData];\
 return;
 
-- (void)downloadProgressWithFileUrl:(NSString *)fileUrl downloadModel:(MFResumeDownloadModel *)model
+- (void)downloadProgressWithDownloadModel:(MFResumeDownloadModel *)model
+{
+    NSUInteger rowIndex = [self.downloadList indexOfObject:model];
+    if (rowIndex == NSNotFound) {
+        return;
+    }
+    
+    [self.tableview reloadRowsAtIndexPaths:@[[NSIndexPath indexPathForRow:rowIndex inSection:0]] withRowAnimation:UITableViewRowAnimationNone];
+    
+}
+
+- (void)downloadStateChange:(MFRDState)state downloadModel:(MFResumeDownloadModel *)model
 {
     MFResumeDownloadDemoReloadTableView
 }
 
-- (void)downloadCompletedWithFileUrl:(NSString *)fileUrl downloadModel:(MFResumeDownloadModel *)model
-{
-    MFResumeDownloadDemoReloadTableView
-}
-
-- (void)downloadFailedWithFileUrl:(NSString *)fileUrl downloadModel:(MFResumeDownloadModel *)model
-{
-    MFResumeDownloadDemoReloadTableView
-}
-
-- (void)downloadPausedWithFileUrl:(NSString *)fileUrl downloadModel:(MFResumeDownloadModel *)model
-{
-    MFResumeDownloadDemoReloadTableView
-}
-
-- (void)downloadCanceledWithFileUrl:(NSString *)fileUrl downloadModel:(MFResumeDownloadModel *)model
+- (void)downloadDeletedWithDownloadModel:(MFResumeDownloadModel *)model
 {
     MFResumeDownloadDemoReloadTableView
 }
